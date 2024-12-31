@@ -60,11 +60,6 @@ class RadioStream:
 
             await self._play_track(track)
 
-            echorythms_path = self.music_path / ECHORYTHMS_TRACK
-            if echorythms_path.exists():
-                logging.info(f"Now playing: {ECHORYTHMS_TRACK}")
-                await self._play_track(echorythms_path)
-
     async def _play_track(self, track):
         cmd = [
             self.ffmpeg, '-re', '-i', str(track), '-af', f"afade=t=in:ss=0:d={FADE_IN_DURATION}", '-c:a', DEFAULT_CODEC,
