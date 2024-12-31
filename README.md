@@ -16,4 +16,4 @@ Where:
 --port -> listening port
 --music -> folder where all music located
 ```
-After all open your browser and go to ```host:port/echo```. Changing of source with config file will be added soon.
+Open your browser and go to ```host:port/echo```. Changing of source with config file will be added soon.
