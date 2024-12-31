@@ -60,7 +60,6 @@ class RadioStream:
 
             await self._play_track(track)
 
-            # Play echorythms.mp3 after each track
             echorythms_path = self.music_path / ECHORYTHMS_TRACK
             if echorythms_path.exists():
                 logging.info(f"Now playing: {ECHORYTHMS_TRACK}")
@@ -118,7 +117,7 @@ async def stream_handler(request):
     await request.app['radio'].register_client(response)
     try:
         while True:
-            await asyncio.sleep(1)  # Keep the connection open
+            await asyncio.sleep(1)  # Stay async holdin
     except asyncio.CancelledError:
         pass
     finally:
@@ -145,8 +144,8 @@ if __name__ == '__main__':
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to listen on')
     parser.add_argument('--port', type=int, required=True, help='Port to listen on')
     parser.add_argument('--music', type=str, required=True, help='Path to the music directory')
-    parser.add_argument('--ffmpeg', type=str, default='ffmpeg', help='Path to ffmpeg binary')
-    parser.add_argument('--bitrate', type=int, default=DEFAULT_BITRATE, help='Bitrate in kbps')
+    parser.add_argument('--ffmpeg', type=str, default='ffmpeg', help='Path to ffmpeg binary') # Idk alternative ffmpeg
+    parser.add_argument('--bitrate', type=int, default=DEFAULT_BITRATE, help='Bitrate in kbps') # Custom bitrate
     args = parser.parse_args()
 
     music_path = Path(args.music)
