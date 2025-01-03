@@ -6,13 +6,15 @@ import logging
 import random
 from datetime import datetime, timedelta
 
-DEFAULT_BITRATE = 128
+from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, ID3NoHeaderError
+
+DEFAULT_BITRATE = 320
 DEFAULT_CODEC = 'libmp3lame'
 DEFAULT_FORMAT = 'mp3'
 DEFAULT_CONTENT_TYPE = 'audio/mpeg'
-ALBUM_TRACK_CHANCE = 0.1
-SORT_INTERVAL_HOURS = 7
-FADE_IN_DURATION = 5
+ALBUM_TRACK_CHANCE = 0.1  # 10% chance for album tracks
+SORT_INTERVAL_HOURS = 7  # Interval for reshuffling tracks
 
 class RadioStream:
     def __init__(self, music_path: Path, ffmpeg: str, bitrate: int = DEFAULT_BITRATE):
@@ -40,6 +42,7 @@ class RadioStream:
         random.shuffle(self.album_tracks)
 
     def _next_track(self):
+        # Check if we need to reshuffle
         if datetime.now() - self.last_shuffle_time >= timedelta(hours=SORT_INTERVAL_HOURS):
             self._shuffle_tracks()
             self.last_shuffle_time = datetime.now()
@@ -52,6 +55,25 @@ class RadioStream:
             self._load_tracks()
             return self._next_track()
 
+    def remove_apic_metadata(self, file_path):
+        try:
+            audio = MP3(file_path, ID3=ID3)
+            has_apic = False
+
+            apic_keys = [tag for tag in audio.tags.keys() if tag.startswith('APIC:')]
+
+            for key in apic_keys:
+                del audio.tags[key]
+                has_apic = True
+
+            if has_apic:
+                audio.save()
+                print(f"Removed APIC from {file_path}")
+            else:
+                print(f"No APIC metadata found in {file_path}")
+        except Exception as e:
+            print(f"Error processing file {file_path}: {e}")
+
     async def generate_audio(self):
         while True:
             track = self._next_track()
@@ -61,22 +83,52 @@ class RadioStream:
             await self._play_track(track)
 
     async def _play_track(self, track):
+        self.remove_apic_metadata(track)
         cmd = [
-            self.ffmpeg, '-re', '-i', str(track), '-af', f"afade=t=in:ss=0:d={FADE_IN_DURATION}", '-c:a', DEFAULT_CODEC,
+            self.ffmpeg, '-re', '-i', str(track),'-c:a', DEFAULT_CODEC,
             '-b:a', f'{self.bitrate}k', '-f', DEFAULT_FORMAT, '-map_metadata', '-1', 'pipe:1'
         ]
-        process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         try:
+            consecutive_empty_reads = 0
+            max_empty_reads = 10
+
             while True:
-                chunk = await process.stdout.read(4096)
-                if not chunk:
+                if process.returncode is not None:
+                    logging.warning(
+                        f"FFmpeg process for track {track} terminated unexpectedly with code {process.returncode}.")
                     break
-                await self.broadcast(chunk)
+                try:
+                    chunk = await asyncio.wait_for(process.stdout.read(8192), timeout=5)
+                    if chunk:
+                        consecutive_empty_reads = 0
+                        await self.broadcast(chunk)
+                    else:
+                        consecutive_empty_reads += 1
+                        if consecutive_empty_reads >= max_empty_reads:
+                            logging.warning(f"Too many consecutive empty reads for track {track}. Stopping playback.")
+                            break
+                except asyncio.TimeoutError:
+                    logging.warning("Timeout while reading from FFmpeg process.")
+                    consecutive_empty_reads += 1
+                    if consecutive_empty_reads >= max_empty_reads:
+                        break
         except Exception as e:
             logging.error(f"Error streaming audio: {e}")
         finally:
-            await process.wait()
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                    await process.wait()
+                except ProcessLookupError:
+                    logging.warning("Process already terminated.")
+                except Exception as e:
+                    logging.error(f"Error while terminating process: {e}")
+            stderr = await process.stderr.read()
+            if stderr:
+                logging.debug(f"FFmpeg stderr output: {stderr.decode().strip()}")
 
     async def broadcast(self, chunk):
         async with self.lock:
@@ -112,7 +164,7 @@ async def stream_handler(request):
     await request.app['radio'].register_client(response)
     try:
         while True:
-            await asyncio.sleep(1)  # Stay async holdin
+            await asyncio.sleep(1)  # Keep the connection open
     except asyncio.CancelledError:
         pass
     finally:
@@ -136,11 +188,11 @@ if __name__ == '__main__':
 
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to listen on')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to listen on')
     parser.add_argument('--port', type=int, required=True, help='Port to listen on')
     parser.add_argument('--music', type=str, required=True, help='Path to the music directory')
-    parser.add_argument('--ffmpeg', type=str, default='ffmpeg', help='Path to ffmpeg binary') # Idk alternative ffmpeg
-    parser.add_argument('--bitrate', type=int, default=DEFAULT_BITRATE, help='Bitrate in kbps') # Custom bitrate
+    parser.add_argument('--ffmpeg', type=str, default='ffmpeg', help='Path to ffmpeg binary')
+    parser.add_argument('--bitrate', type=int, default=DEFAULT_BITRATE, help='Bitrate in kbps')
     args = parser.parse_args()
 
     music_path = Path(args.music)
